@@ -1,4 +1,4 @@
-module github.com/P-E-R-R-Y/gitperry
+module github.com/P-E-R-R-Y/ghp
 
 go 1.20
 

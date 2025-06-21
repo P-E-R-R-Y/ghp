@@ -16,4 +16,5 @@ type Repository struct {
 	Language    string `json:"language,omitempty"`
 	Private     bool   `json:"private"`
 	Fork        bool   `json:"fork"`
+	IsTemplate  bool   `json:"is_template"`
 }

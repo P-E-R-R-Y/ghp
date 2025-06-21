@@ -1,56 +1,73 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
-
-	"github.com/P-E-R-R-Y/gitperry/internal/github"
-	"github.com/P-E-R-R-Y/gitperry/internal/color"
-	"github.com/P-E-R-R-Y/gitperry/config"
 
 	"github.com/spf13/cobra"
 
+	"github.com/P-E-R-R-Y/ghp/internal/github"
+	"github.com/P-E-R-R-Y/ghp/internal/color"
 )
 
-var filters []string
-var groups []string
-var defaultGroups = []string{"^i.*module$", ".*module$", "^i.*", ".*"}
-var repeat bool
-
-
-var listCmd = &cobra.Command{
+var ghlistCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List repositories for a GitHub user or organization",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate flags: either org or user must be set, but not both
-		if (user == "") {
-			return errors.New("must specify --org or --user")
-		}
 
-		token := config.GetToken()
-		client := github.NewClient(token)
+		defaultGroups := []string{"^(impobject|iobject).*", "^i.*module$", ".*module$", "^i.*", ".*"}
 
-		repos, err := client.FetchUserRepos(user)
+		user, _ := cmd.Flags().GetString("user")
+		org, _ := cmd.Flags().GetString("org")
+		filters, _ := cmd.Flags().GetStringSlice("filter")
+		groups, _ := cmd.Flags().GetStringSlice("group")
+		repeat, _ := cmd.Flags().GetBool("repeat")
 		
-		if err != nil {
-			return fmt.Errorf("error fetching repositories: %w", err)
+		// Validate flags
+		if user == "" && org == "" {
+			return errors.New("must provide either --user or --org")
 		}
-
+		if user != "" && org != "" {
+			return errors.New("only one of --user or --org can be set")
+		}
+	
+		// Build endpoint
+		var endpoint string
+		if user != "" {
+			endpoint = fmt.Sprintf("/users/%s/repos", user)
+		} else {
+			endpoint = fmt.Sprintf("/orgs/%s/repos", org)
+		}
+	
+		// Call gh
+		cmdOutput, err := exec.Command("gh", "api", endpoint, "--paginate").Output()
+		if err != nil {
+			return fmt.Errorf("failed to run gh: %w", err)
+		}
+			
+		// Parse JSON
+		var repos []github.Repository
+		if err := json.Unmarshal(cmdOutput, &repos); err != nil {
+			return fmt.Errorf("failed to parse JSON: %w", err)
+		}
+	
 		if len(repos) == 0 {
 			fmt.Println("No repositories found.")
 			return nil
 		}
-
-		//Filter
+	
+		// --- Filtering ---
 		var results []github.Repository
-
-		if (filters != nil) {
+	
+		if filters != nil && len(filters) > 0 {
 			for _, repo := range repos {
 				for i, filter := range filters {
 					regex, err := regexp.Compile(filter)
 					if err != nil {
-						return errors.New(fmt.Sprintf("the filter nb: %i, failed to give a regex", i))
+						return fmt.Errorf("the filter #%d is invalid regex: %v", i, err)
 					}
 					if regex.MatchString(repo.Name) {
 						results = append(results, repo)
@@ -61,44 +78,51 @@ var listCmd = &cobra.Command{
 		} else {
 			results = repos
 		}
-
-		//groups
-		printed := make(map[string]bool) // track printed repo names
-
+	
+		// --- Grouping & Printing ---
+		printed := make(map[string]bool)
+	
 		if len(groups) == 0 {
-			// --group was passed but empty (i.e. "--group" with no value)
+			// Use defaultGroups if groups not set
 			groups = defaultGroups
 		}
+	
 		for _, group := range groups {
-			re := regexp.MustCompile(group)
+			re, err := regexp.Compile(group)
+			if err != nil {
+				return fmt.Errorf("invalid group regex %q: %v", group, err)
+			}
+	
 			fmt.Printf("Group: %s\n", group)
 			for _, repo := range results {
 				if printed[repo.Name] && !repeat {
-					continue // skip if already printed
+					continue
 				}
 				if re.MatchString(repo.Name) {
-					fmt.Printf(" - %s%s%s (%s)%s\n", color.Green, repo.Name, color.Blue, repo.HTMLURL, color.Reset)
+					templateStr := map[bool]string{true: color.Yellow + "template" + color.Reset, false: ""}[repo.IsTemplate]
+					fmt.Printf(" - %s%s%s (%s) %s %s\n", color.Green, repo.Name, color.Blue, repo.HTMLURL, templateStr, color.Reset)
 					printed[repo.Name] = true
 				}
 			}
 			fmt.Println()
 		}
-
-		fmt.Printf("Others:\n")
+	
+		fmt.Println("Others:")
 		for _, repo := range results {
 			if !printed[repo.Name] {
-				fmt.Printf(" - %s (%s)\n", repo.Name, repo.HTMLURL)
+				templateStr := map[bool]string{true: color.Yellow + "template" + color.Reset, false: ""}[repo.IsTemplate]
+				fmt.Printf(" - %s%s%s (%s) %s %s\n", color.Green, repo.Name, color.Blue, repo.HTMLURL, templateStr, color.Reset)
 			}
-		}
-
+		}	
 		return nil
 	},
 }
 
 func init() {
-	listCmd.Flags().StringVarP(&user, "user", "u", "", "GitHub username")
-	listCmd.Flags().StringSliceVarP(&filters, "filter", "f", nil, "Filter result")
-	listCmd.Flags().StringSliceVarP(&groups, "group", "g", nil, "Group result")
-	listCmd.Flags().BoolVarP(&repeat, "repeat", "r", false, "Repeat value if match with multiple groups")
-	rootCmd.AddCommand(listCmd)
+	ghlistCmd.Flags().StringP("user", "u", "", "GitHub username")
+	ghlistCmd.Flags().StringP("org", "o", "", "GitHub organisation")
+	ghlistCmd.Flags().StringSliceP("filter", "f", nil, "Filter result")
+	ghlistCmd.Flags().StringSliceP("group", "g", nil, "Group result")
+	ghlistCmd.Flags().BoolP("repeat", "r", false, "Repeat repos in multiple groups if matched")
+	rootCmd.AddCommand(ghlistCmd)
 }

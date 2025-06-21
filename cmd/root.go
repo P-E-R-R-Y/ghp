@@ -8,7 +8,7 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gitperry",
+	Use:   "ghp",
 	Short: "Fetch GitHub repos from an organization",
 }
 
